@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     DOCLING_OCR_ENABLED: bool = False  # Enable OCR for docling parsers (PDF, images)
     DOCLING_OCR_ATTACHMENTS_ENABLED: bool = False  # Enable OCR for docling when parsing attachments
     VECTOR_STORE: str = (
-        "faiss"  #  "faiss" or "elasticsearch" or "qdrant" or "milvus" or "lancedb" or "pgvector"
+        "faiss"  #  "faiss" or "elasticsearch" or "qdrant" or "milvus" or "lancedb" or "pgvector" or "oracle"
     )
     RETRIEVERS_ENABLED: list = ["classic_rag"]
     AGENT_NAME: str = "classic"
@@ -126,6 +126,12 @@ class Settings(BaseSettings):
 
     # PGVector vectorstore config
     PGVECTOR_CONNECTION_STRING: Optional[str] = None
+    
+    # Oracle Database 23ai vectorstore config
+    ORACLE_CONNECTION_STRING: Optional[str] = None
+    # Format: user/password@hostname:port/service_name or use DSN
+    # Example: "username/password@localhost:1521/XEPDB1"
+    
     # Milvus vectorstore config
     MILVUS_COLLECTION_NAME: Optional[str] = "docsgpt"
     MILVUS_URI: Optional[str] = "./milvus_local.db"  # milvus lite version as default

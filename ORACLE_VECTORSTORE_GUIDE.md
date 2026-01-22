@@ -1,0 +1,324 @@
+# Oracle Database 23ai Vector Store Implementation Guide
+
+## 📚 Understanding the DocsGPT Codebase
+
+This guide will help you understand how DocsGPT works, how vector stores are implemented, and how we've added Oracle Database 23ai as a vector store option.
+
+### Architecture Overview
+
+DocsGPT is a document-based question-answering system that works in several stages:
+
+1. **Document Ingestion**: Users upload documents (PDFs, Word, HTML, etc.)
+2. **Text Processing**: Documents are parsed and split into chunks
+3. **Embedding Generation**: Text chunks are converted to vector embeddings (numerical representations)
+4. **Vector Storage**: Embeddings are stored in a vector database for similarity search
+5. **Query Processing**: User queries are embedded and used to find similar document chunks
+6. **Answer Generation**: Retrieved chunks are used to generate answers using LLMs
+
+### Key Directories
+
+```
+application/
+├── vectorstore/       # Vector database implementations
+├── parser/            # Document parsing and chunking
+├── llm/              # Large Language Model integrations
+├── retriever/        # Retrieval strategies (RAG)
+├── agents/           # AI agents for complex tasks
+├── api/              # REST API endpoints
+└── core/             # Configuration and settings
+```
+
+## 🔍 How Vector Stores Work in DocsGPT
+
+### Base Architecture
+
+All vector stores in DocsGPT inherit from `BaseVectorStore` (defined in `application/vectorstore/base.py`). This provides a common interface:
+
+```python
+class BaseVectorStore(ABC):
+    @abstractmethod
+    def search(self, question: str, k: int) -> List[Document]:
+        """Search for similar documents"""
+        
+    @abstractmethod
+    def add_texts(self, texts: List[str], metadatas: List[dict]) -> List[str]:
+        """Add texts with embeddings to the vectorstore"""
+        
+    def delete_index(self):
+        """Delete all documents for this source"""
+        
+    def get_chunks(self):
+        """Get all chunks for this source"""
+        
+    def add_chunk(self, text: str, metadata: dict):
+        """Add a single chunk"""
+        
+    def delete_chunk(self, chunk_id: str):
+        """Delete a specific chunk"""
+```
+
+### Vector Store Registration
+
+Vector stores are registered in `application/vectorstore/vector_creator.py`:
+
+```python
+class VectorCreator:
+    vectorstores = {
+        "faiss": FaissStore,
+        "elasticsearch": ElasticsearchStore,
+        "mongodb": MongoDBVectorStore,
+        "qdrant": QdrantStore,
+        "milvus": MilvusStore,
+        "pgvector": PGVectorStore,
+        "oracle": OracleVectorStore  # ← Our new addition!
+    }
+```
+
+When you set `VECTOR_STORE=oracle` in your `.env` file, DocsGPT will use the Oracle implementation.
+
+### How Vector Stores Are Used
+
+1. **During Document Upload** (`application/parser/embedding_pipeline.py`):
+   - Documents are chunked
+   - Each chunk is embedded
+   - Chunks are stored via `vectorstore.add_texts()`
+
+2. **During Query** (`application/api/answer/`):
+   - User query is embedded
+   - Similar chunks are retrieved via `vectorstore.search()`
+   - Retrieved chunks are used to generate the answer
+
+3. **Vector Store Selection** (`application/core/settings.py`):
+   - The `VECTOR_STORE` environment variable determines which store to use
+   - Connection details come from settings (e.g., `ORACLE_CONNECTION_STRING`)
+
+## 🗄️ Oracle Database 23ai Implementation
+
+### What is Oracle Database 23ai?
+
+Oracle Database 23ai (formerly Oracle 23c) includes native vector search capabilities:
+- **VECTOR data type**: Native support for storing embedding vectors
+- **Vector similarity search**: SQL operators like `VECTOR_DISTANCE()` for similarity search
+- **Vector indexes**: Specialized indexes (IVFFlat, HNSW) for fast approximate nearest neighbor search
+- **Hybrid search**: Combines vector search with traditional SQL queries
+
+### Implementation Details
+
+Our Oracle implementation (`application/vectorstore/oracle.py`) follows the same pattern as other vector stores:
+
+#### 1. Initialization
+- Connects to Oracle using `oracledb` Python driver
+- Creates table with VECTOR column if it doesn't exist
+- Creates vector index for fast similarity search
+- Stores source_id for document isolation
+
+#### 2. Key Methods
+
+**`search(question, k=2)`:**
+- Embeds the query text
+- Executes SQL query with `VECTOR_DISTANCE()` function
+- Uses COSINE distance for similarity
+- Returns top K most similar documents
+
+**`add_texts(texts, metadatas)`:**
+- Embeds multiple texts
+- Inserts into Oracle table with VECTOR column
+- Stores metadata as JSON in CLOB column
+- Returns inserted document IDs
+
+**`delete_index()`:**
+- Deletes all documents for a specific source_id
+- Allows clean re-indexing
+
+#### 3. Database Schema
+
+```sql
+CREATE TABLE documents (
+    id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    text CLOB NOT NULL,
+    embedding VECTOR(768, FLOAT32),  -- Vector dimension matches embedding model
+    metadata CLOB,                    -- JSON metadata
+    source_id VARCHAR2(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX documents_embedding_idx 
+ON documents (embedding)
+INDEXTYPE IS VECTOR_INDEX
+PARAMETERS ('type IVFFlat operation "vector distance (cosine, euclidean)"');
+```
+
+## 🚀 Setup and Configuration
+
+### Prerequisites
+
+1. **Oracle Database 23ai** installed and running
+   - Oracle Database 23c or later with AI Vector Search feature
+   - For Oracle Cloud, use Oracle Database 23ai Free Tier
+
+2. **Python Dependencies**
+   ```bash
+   pip install oracledb
+   ```
+
+### Configuration Steps
+
+1. **Set Environment Variables** (in `.env` file):
+
+```bash
+# Choose Oracle as your vector store
+VECTOR_STORE=oracle
+
+# Oracle connection string
+# Format: user/password@hostname:port/service_name
+# Example: "username/password@localhost:1521/XEPDB1"
+# Or use connection descriptor:
+# "username/password@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=localhost)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XEPDB1)))"
+ORACLE_CONNECTION_STRING=user/password@hostname:port/service_name
+
+# Embedding model configuration (as usual)
+EMBEDDINGS_NAME=huggingface_sentence-transformers/all-mpnet-base-v2
+# or
+EMBEDDINGS_NAME=openai_text-embedding-ada-002
+EMBEDDINGS_KEY=your-openai-api-key  # if using OpenAI embeddings
+```
+
+2. **Test Connection**:
+
+You can test your Oracle connection separately:
+```python
+import oracledb
+
+conn = oracledb.connect("user/password@hostname:port/service_name")
+print("Connected successfully!")
+conn.close()
+```
+
+3. **Verify Vector Support**:
+
+Check that your Oracle database supports VECTOR type:
+```sql
+SELECT * FROM V$VERSION;
+-- Should show Oracle Database 23c or later
+
+-- Test vector creation
+CREATE TABLE test_vector (
+    id NUMBER,
+    vec VECTOR(3, FLOAT32)
+);
+```
+
+## 📝 Usage Example
+
+Once configured, DocsGPT will automatically use Oracle for vector storage:
+
+```python
+# This happens automatically when you upload documents
+from application.vectorstore.vector_creator import VectorCreator
+
+# Create Oracle vector store instance
+store = VectorCreator.create_vectorstore(
+    "oracle",
+    source_id="document_123",
+    embeddings_key=os.getenv("EMBEDDINGS_KEY")
+)
+
+# Add documents (automatic during upload)
+store.add_texts(
+    texts=["Document chunk 1", "Document chunk 2"],
+    metadatas=[{"page": 1}, {"page": 2}]
+)
+
+# Search (automatic during query)
+results = store.search("What is this document about?", k=3)
+for doc in results:
+    print(doc.page_content)
+    print(doc.metadata)
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+1. **Connection Failed**
+   - Verify Oracle database is running
+   - Check connection string format
+   - Ensure network access to database
+   - Verify credentials
+
+2. **VECTOR Type Not Supported**
+   - Ensure Oracle Database 23c or later
+   - Check if AI Vector Search feature is enabled
+   - Verify you're not using older Oracle versions
+
+3. **Index Creation Fails**
+   - Check table creation succeeded first
+   - Verify vector dimension matches embedding model
+   - Check Oracle user has CREATE INDEX privilege
+
+4. **Vector Binding Issues**
+   - Ensure `oracledb` package is installed and up-to-date
+   - Check Oracle client libraries are properly configured
+   - Verify vector format matches (FLOAT32 vs FLOAT64)
+
+### Debug Tips
+
+Enable logging to see detailed information:
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+Check Oracle logs for database-side errors.
+
+## 🎯 Key Design Decisions
+
+1. **Follows Existing Pattern**: Our Oracle implementation follows the same structure as `PGVectorStore`, making it consistent with the codebase.
+
+2. **Embedding Model Agnostic**: Works with any embedding model DocsGPT supports (OpenAI, HuggingFace, etc.).
+
+3. **Source Isolation**: Each document source gets its own `source_id`, allowing multiple document collections in the same table.
+
+4. **Metadata Storage**: Uses JSON in CLOB column for flexible metadata storage.
+
+5. **Connection Management**: Opens connections as needed and closes them properly.
+
+## 🔄 Comparison with Other Vector Stores
+
+| Feature | Oracle 23ai | PostgreSQL+pgvector | Qdrant | Milvus |
+|---------|------------|---------------------|--------|--------|
+| SQL Support | ✅ Native | ✅ Yes | ❌ No | ❌ No |
+| Vector Index | ✅ IVFFlat/HNSW | ✅ IVFFlat/HNSW | ✅ HNSW | ✅ HNSW |
+| Hybrid Search | ✅ Excellent | ✅ Good | ⚠️ Limited | ⚠️ Limited |
+| Transaction Support | ✅ Full ACID | ✅ Full ACID | ⚠️ Limited | ⚠️ Limited |
+| Enterprise Features | ✅ Advanced | ✅ Good | ⚠️ Basic | ⚠️ Basic |
+
+## 📖 Additional Resources
+
+- [Oracle Database 23ai Vector Search Documentation](https://docs.oracle.com/en/database/oracle/oracle-database/23/vectr/)
+- [oracledb Python Driver Documentation](https://python-oracledb.readthedocs.io/)
+- [DocsGPT Official Documentation](https://docs.docsgpt.ai/)
+
+## 🤝 Contributing
+
+When contributing to this implementation:
+
+1. Follow the existing code style
+2. Add error handling for edge cases
+3. Include logging for debugging
+4. Test with different embedding dimensions
+5. Verify connection cleanup
+
+## ✅ Next Steps
+
+1. Test the implementation with your Oracle database
+2. Verify embedding dimensions match your model
+3. Test document upload and query
+4. Monitor performance and optimize indexes if needed
+5. Consider adding support for Oracle's in-database embedding generation
+
+---
+
+**Happy coding! 🚀**
+
+If you have questions or need help, check the DocsGPT community or create an issue on GitHub.

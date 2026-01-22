@@ -63,6 +63,7 @@ prance==25.4.8.0
 prompt-toolkit==3.0.52
 protobuf==6.33.2
 psycopg2-binary==2.9.11
+oracledb==2.4.0
 py==1.11.0
 pydantic
 pydantic-core
